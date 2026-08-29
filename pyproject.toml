@@ -3,6 +3,9 @@ name = "dnd-transcriber"
 version = "1.0.0"
 description = "Offline Whisper transcription worker for D&D session recordings"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Eren YANGİL", email = "erendukan.34@gmail.com" }]
+readme = "README.md"
 
 [project.scripts]
 dndt = "dnd_transcriber.cli:main"

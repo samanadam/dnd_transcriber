@@ -148,3 +148,9 @@ invisible to the other side and an interrupted transfer is harmless. The schema
 carries a version number: if the two repos drift apart, the mismatch fails
 loudly instead of being silently misread. **Change `contract.py` in both repos
 in the same commit.**
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Copyright (c) 2026 Eren YANGİL.
