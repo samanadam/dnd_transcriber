@@ -239,18 +239,23 @@ class R2Transport:
         return f"{prefix}/{session_id}/"
 
     def _keys(self, prefix: str) -> list[str]:
-        keys: list[str] = []
+        return sorted(self._sizes(prefix))
+
+    def _sizes(self, prefix: str) -> dict[str, int]:
+        """Every key under a prefix with its stored size, in bytes."""
+        sizes: dict[str, int] = {}
         token = None
         while True:
             kwargs = {"Bucket": self.bucket, "Prefix": prefix}
             if token:
                 kwargs["ContinuationToken"] = token
             response = self.client.list_objects_v2(**kwargs)
-            keys += [item["Key"] for item in response.get("Contents", [])]
+            for item in response.get("Contents", []):
+                sizes[item["Key"]] = int(item.get("Size", 0))
             token = response.get("NextContinuationToken")
             if not response.get("IsTruncated") or not token:
                 break
-        return sorted(keys)
+        return sizes
 
     # -- operations --------------------------------------------------------
 
@@ -282,6 +287,14 @@ class R2Transport:
         return target
 
     def push(self, session_id: str, source: Path) -> None:
+        """Send a transcript back, and prove it arrived before returning.
+
+        The caller retires the session's READY marker as soon as this returns,
+        which takes it out of the work queue for good. "The uploads did not
+        raise" is not a strong enough guarantee for that, so this re-reads the
+        prefix and fails unless every file is present at its own size. A push
+        that only half succeeded then stays collectable instead of vanishing.
+        """
         base = self._prefix(self.INBOX_PREFIX, session_id)
         files = [p for p in sorted(Path(source).iterdir()) if p.is_file() and p.name != DONE_MARKER]
         for path in files:
@@ -290,6 +303,19 @@ class R2Transport:
             )
         # The marker last, so a partial push is never acted on.
         self.client.put_object(Bucket=self.bucket, Key=f"{base}{DONE_MARKER}", Body=b"")
+
+        stored = self._sizes(base)
+        if f"{base}{DONE_MARKER}" not in stored:
+            raise SyncError(f"Pushed {session_id} but R2 has no {DONE_MARKER}")
+        for path in files:
+            key = f"{base}{path.name}"
+            if key not in stored:
+                raise SyncError(f"Pushed {session_id} but {path.name} is missing from R2")
+            if stored[key] != path.stat().st_size:
+                raise SyncError(
+                    f"Pushed {session_id} but {path.name} is {stored[key]} bytes in R2, "
+                    f"{path.stat().st_size} here"
+                )
 
     def discard_remote(self, session_id: str) -> None:
         """Release a collected session.
