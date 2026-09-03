@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config
-from .contract import ContractError, SessionMetadata, validate_outbox
+from .contract import TRANSCRIPT_MD, ContractError, SessionMetadata, validate_outbox
 from .jobs import JobResult, run_session
 from .quiet_hours import in_quiet_hours
 from .sync import Transport
@@ -91,7 +91,7 @@ class Runner:
                 SessionState(
                     session_id=session_id,
                     pulled=True,
-                    transcribed=(self.config.outgoing_dir / session_id).is_dir(),
+                    transcribed=(self.config.outgoing_dir / session_id / TRANSCRIPT_MD).is_file(),
                     pushed=(self.config.archive_dir / session_id).is_dir(),
                 )
             )
@@ -134,7 +134,11 @@ class Runner:
         )
         for directory in candidates:
             sid = directory.name
-            if (self.config.outgoing_dir / sid).is_dir():
+            # The directory existing is not the same as the work being done: an
+            # interrupted run can leave it behind without a transcript in it.
+            # Treating that as finished would send an empty transcript back and
+            # retire the session for good.
+            if (self.config.outgoing_dir / sid / TRANSCRIPT_MD).is_file():
                 log.info("Session %s is already transcribed; skipping", sid)
                 continue
             try:
@@ -156,6 +160,9 @@ class Runner:
                 )
             except Exception:  # noqa: BLE001 - one bad session must not stop the rest
                 log.exception("Transcription failed for %s", sid)
+                # Drop any half-written output, so a retry starts clean and
+                # nothing downstream mistakes it for finished work.
+                shutil.rmtree(self.config.outgoing_dir / sid, ignore_errors=True)
                 self._move(directory, self.config.failed_dir)
                 continue
             log.info(
@@ -177,6 +184,18 @@ class Runner:
         pushed: list[str] = []
         for directory in candidates:
             sid = directory.name
+            # Pushing is irreversible in effect: it retires the session on the
+            # recorder. An outgoing directory with no transcript in it - left by
+            # a run that died between creating it and writing to it - would
+            # otherwise send nothing, release the audio and lose the session.
+            if not (directory / TRANSCRIPT_MD).is_file():
+                log.error(
+                    "Refusing to send %s: %s has no %s. Delete it and transcribe again.",
+                    sid,
+                    directory,
+                    TRANSCRIPT_MD,
+                )
+                continue
             log.info("Sending transcript for %s", sid)
             self.transport.push(sid, directory)
             if discard_remote:

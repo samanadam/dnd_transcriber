@@ -96,9 +96,16 @@ def cmd_session(runner: Runner, args: argparse.Namespace) -> int:
 
 def cmd_status(runner: Runner, _args: argparse.Namespace) -> int:
     config = runner.config
-    where = config.ssh_target if config.is_remote else "local directories"
-    print(f"Recorder:  {where}")
-    print(f"Outbox:    {config.remote_outbox}")
+    # Reporting the SSH settings while actually talking to R2 sends whoever is
+    # debugging a transfer to look in entirely the wrong place.
+    if config.uses_r2:
+        print("Recorder:  Cloudflare R2")
+        print(f"Bucket:    {config.r2_bucket}")
+        print(f"Archive:   audio {'kept' if config.r2_keep_audio else 'deleted'} after collection")
+    else:
+        where = config.ssh_target if config.is_remote else "local directories"
+        print(f"Recorder:  {where}")
+        print(f"Outbox:    {config.remote_outbox}")
     print(f"Workspace: {config.workspace}")
     print(
         f"Model:     {config.whisper_model} ({config.whisper_device}/{config.whisper_compute_type})"

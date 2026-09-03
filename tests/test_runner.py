@@ -300,3 +300,62 @@ def test_quiet_hours_gate_work_when_enabled(setup):
 
     assert runner.may_work(datetime(2026, 5, 1, 3, 0)) is True
     assert runner.may_work(datetime(2026, 5, 1, 14, 0)) is False
+
+
+# -- an interrupted run must not be mistaken for a finished one ------------
+
+
+def test_an_empty_outgoing_directory_is_not_treated_as_transcribed(setup):
+    """A run that died between creating the directory and writing to it."""
+    config, transport, outbox, _ = setup
+    stage_remote(outbox)
+    runner = Runner(config, transport, FakeTranscriber())
+    runner.fetch()
+    (config.outgoing_dir / "s1").mkdir(parents=True)
+
+    results = runner.transcribe()
+
+    assert [r.session_id for r in results] == ["s1"], "the session must still be transcribed"
+    assert (config.outgoing_dir / "s1" / "transcript.md").is_file()
+
+
+def test_push_refuses_a_directory_with_no_transcript(setup):
+    """Pushing retires the session on the recorder, so it must not push nothing."""
+    config, transport, outbox, inbox = setup
+    stage_remote(outbox)
+    runner = Runner(config, transport, FakeTranscriber())
+    runner.fetch()
+    (config.outgoing_dir / "s1").mkdir(parents=True)
+
+    assert runner.push() == []
+    assert not (inbox / "s1" / DONE_MARKER).exists(), "nothing may be marked done"
+    assert (outbox / "s1" / READY_MARKER).is_file(), "the audio must stay collectable"
+
+
+def test_status_agrees_with_push_about_what_transcribed_means(setup):
+    config, transport, outbox, _ = setup
+    stage_remote(outbox)
+    runner = Runner(config, transport, FakeTranscriber())
+    runner.fetch()
+    (config.outgoing_dir / "s1").mkdir(parents=True)
+
+    state = runner.local_sessions()[0]
+    assert not state.transcribed
+    assert state.stage == "pulled, not transcribed"
+
+
+def test_a_failed_run_leaves_no_half_written_output_behind(setup):
+    config, transport, outbox, _ = setup
+    stage_remote(outbox)
+
+    class Exploding:
+        def transcribe_file(self, path, language, initial_prompt=None):
+            (config.outgoing_dir / "s1").mkdir(parents=True, exist_ok=True)
+            raise RuntimeError("model blew up")
+
+    runner = Runner(config, transport, Exploding())
+    runner.fetch()
+
+    assert runner.transcribe() == []
+    assert not (config.outgoing_dir / "s1").exists(), "a retry must start clean"
+    assert (config.failed_dir / "s1").is_dir()
