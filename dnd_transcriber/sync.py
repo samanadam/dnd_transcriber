@@ -178,8 +178,151 @@ class SshTransport:
         )
 
 
+class R2Transport:
+    """Cloudflare R2 as the exchange medium.
+
+    Same four operations, same marker-last ordering, no SSH. Both halves reach
+    outbound to Cloudflare and neither needs to be reachable, so this machine
+    can sit behind a home router with nothing forwarded - and the recorder does
+    not need a Unix account for us to log into.
+
+    The object layout mirrors the directory layout exactly:
+
+        outbox/<session_id>/metadata.json, <user_id>.opus, READY
+        inbox/<session_id>/transcript.md, transcript.json, DONE
+    """
+
+    OUTBOX_PREFIX = "outbox"
+    INBOX_PREFIX = "inbox"
+
+    def __init__(
+        self,
+        account_id: str,
+        access_key_id: str,
+        secret_access_key: str,
+        bucket: str,
+        *,
+        keep_audio: bool = True,
+        client=None,  # noqa: ANN001 - an S3 client, injected by tests
+    ) -> None:
+        self.bucket = bucket
+        self.keep_audio = keep_audio
+        if client is not None:
+            self.client = client
+            return
+
+        try:
+            import boto3
+            from botocore.config import Config as BotoConfig
+        except ImportError as exc:  # pragma: no cover - dependency is in requirements.txt
+            raise SyncError("STORAGE_BACKEND=r2 needs boto3. pip install boto3.") from exc
+
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            region_name="auto",  # R2 ignores it; the SigV4 signer requires one
+            config=BotoConfig(
+                signature_version="s3v4",
+                retries={"max_attempts": 5, "mode": "standard"},
+            ),
+        )
+
+    # -- plumbing ----------------------------------------------------------
+
+    @staticmethod
+    def _prefix(prefix: str, session_id: str) -> str:
+        session_id = str(session_id)
+        if not session_id or "/" in session_id or "\\" in session_id or session_id in {".", ".."}:
+            raise SyncError(f"Not a usable session id: {session_id!r}")
+        return f"{prefix}/{session_id}/"
+
+    def _keys(self, prefix: str) -> list[str]:
+        keys: list[str] = []
+        token = None
+        while True:
+            kwargs = {"Bucket": self.bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            response = self.client.list_objects_v2(**kwargs)
+            keys += [item["Key"] for item in response.get("Contents", [])]
+            token = response.get("NextContinuationToken")
+            if not response.get("IsTruncated") or not token:
+                break
+        return sorted(keys)
+
+    # -- operations --------------------------------------------------------
+
+    def list_ready(self) -> list[str]:
+        suffix = f"/{READY_MARKER}"
+        found = []
+        for key in self._keys(f"{self.OUTBOX_PREFIX}/"):
+            if key.endswith(suffix):
+                session_id = key[len(self.OUTBOX_PREFIX) + 1 : -len(suffix)]
+                if session_id and "/" not in session_id:
+                    found.append(session_id)
+        return sorted(found)
+
+    def pull(self, session_id: str, destination: Path) -> Path:
+        base = self._prefix(self.OUTBOX_PREFIX, session_id)
+        keys = self._keys(base)
+        if f"{base}{READY_MARKER}" not in keys:
+            raise SyncError(f"{session_id} is not marked {READY_MARKER} in R2")
+
+        target = Path(destination) / session_id
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        for key in keys:
+            name = key[len(base) :]
+            if not name or "/" in name:
+                continue
+            self.client.download_file(Bucket=self.bucket, Key=key, Filename=str(target / name))
+        return target
+
+    def push(self, session_id: str, source: Path) -> None:
+        base = self._prefix(self.INBOX_PREFIX, session_id)
+        files = [p for p in sorted(Path(source).iterdir()) if p.is_file() and p.name != DONE_MARKER]
+        for path in files:
+            self.client.upload_file(
+                Filename=str(path), Bucket=self.bucket, Key=f"{base}{path.name}"
+            )
+        # The marker last, so a partial push is never acted on.
+        self.client.put_object(Bucket=self.bucket, Key=f"{base}{DONE_MARKER}", Body=b"")
+
+    def discard_remote(self, session_id: str) -> None:
+        """Release a collected session.
+
+        With `keep_audio` on (the default) R2 is the long-term archive, so the
+        audio stays and only the READY marker is retired. That distinction
+        matters: the marker is what makes a session appear in `list_ready`, so
+        leaving it in place would keep every session ever recorded in the work
+        queue forever - and would re-pull the whole bucket if this machine's
+        workspace were ever rebuilt.
+
+        With `keep_audio` off the objects go entirely, and the workspace
+        archive here becomes the only copy.
+        """
+        base = self._prefix(self.OUTBOX_PREFIX, session_id)
+        if self.keep_audio:
+            self.client.delete_object(Bucket=self.bucket, Key=f"{base}{READY_MARKER}")
+            log.info("Collected %s; audio stays in R2 as the archive", session_id)
+            return
+        for key in self._keys(base):
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+
+
 def build_transport(config) -> Transport:  # noqa: ANN001 - Config, avoiding a cycle
     """Pick a transport from configuration."""
+    if config.uses_r2:
+        return R2Transport(
+            config.r2_account_id,
+            config.r2_access_key_id,
+            config.r2_secret_access_key,
+            config.r2_bucket,
+            keep_audio=config.r2_keep_audio,
+        )
     if config.is_remote:
         return SshTransport(
             config.ssh_target,

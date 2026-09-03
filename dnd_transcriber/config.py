@@ -63,6 +63,18 @@ class Config:
     ssh_port: int = 22
     ssh_key: str = ""
 
+    # -- or Cloudflare R2 --------------------------------------------------
+    # With "r2" neither machine needs to reach the other: both talk outbound to
+    # Cloudflare. No SSH account on the recorder, no port forwarding here.
+    storage_backend: str = "local"
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
+    # R2 doubles as the long-term audio archive, so collecting a session leaves
+    # its objects in place rather than deleting them from the recorder's outbox.
+    r2_keep_audio: bool = True
+
     # -- Whisper -----------------------------------------------------------
     whisper_model: str = "medium"
     whisper_device: str = "cpu"
@@ -105,6 +117,10 @@ class Config:
         return self.workspace / "failed"
 
     @property
+    def uses_r2(self) -> bool:
+        return self.storage_backend == "r2"
+
+    @property
     def is_remote(self) -> bool:
         return bool(self.remote_host)
 
@@ -137,6 +153,23 @@ def load_config() -> Config:
     except Exception as exc:  # noqa: BLE001
         raise ConfigError(f"Unknown TIMEZONE {timezone_name!r}") from exc
 
+    storage_backend = _get("STORAGE_BACKEND", "local").lower()
+    if storage_backend not in {"local", "r2"}:
+        raise ConfigError(f"STORAGE_BACKEND must be 'local' or 'r2', got {storage_backend!r}")
+    r2_settings = {
+        "R2_ACCOUNT_ID": _get("R2_ACCOUNT_ID"),
+        "R2_ACCESS_KEY_ID": _get("R2_ACCESS_KEY_ID"),
+        "R2_SECRET_ACCESS_KEY": _get("R2_SECRET_ACCESS_KEY"),
+        "R2_BUCKET": _get("R2_BUCKET"),
+    }
+    if storage_backend == "r2":
+        missing = sorted(name for name, value in r2_settings.items() if not value)
+        if missing:
+            raise ConfigError(
+                f"STORAGE_BACKEND=r2 needs {', '.join(missing)}. "
+                "Use the same bucket the recorder writes to."
+            )
+
     return Config(
         workspace=Path(_get("WORKSPACE_DIR", "./workspace")),
         remote_host=_get("REMOTE_HOST"),
@@ -145,6 +178,12 @@ def load_config() -> Config:
         remote_inbox=_get("REMOTE_INBOX", "/srv/dnd-bot-data/inbox"),
         ssh_port=_get_int("SSH_PORT", 22),
         ssh_key=_get("SSH_KEY"),
+        storage_backend=storage_backend,
+        r2_account_id=r2_settings["R2_ACCOUNT_ID"],
+        r2_access_key_id=r2_settings["R2_ACCESS_KEY_ID"],
+        r2_secret_access_key=r2_settings["R2_SECRET_ACCESS_KEY"],
+        r2_bucket=r2_settings["R2_BUCKET"],
+        r2_keep_audio=_get_bool("R2_KEEP_AUDIO", True),
         whisper_model=_get("WHISPER_MODEL", "medium"),
         whisper_device=_get("WHISPER_DEVICE", "cpu"),
         whisper_compute_type=_get("WHISPER_COMPUTE_TYPE", "int8"),

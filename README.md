@@ -4,10 +4,15 @@ The offline half of a two-part system. It collects session recordings staged by
 [dnd_bot](https://github.com/samanadam/dnd_bot), transcribes them locally with
 Whisper, and sends the transcripts back for the bot to post.
 
-**It never talks to Discord.** No token, no gateway, no network access beyond a
-single outbound SSH connection to the recorder. That is the point: the machine
-with the CPU does not need to reach Discord, and the machine that reaches
-Discord does not need a CPU.
+**It never talks to Discord.** No token, no gateway, and no inbound connections
+at all — it reaches out to collect work and pushes the result back. That is the
+point: the machine with the CPU does not need to reach Discord, and the machine
+that reaches Discord does not need a CPU.
+
+Two ways to exchange sessions with the recorder, set by `STORAGE_BACKEND`:
+a **Cloudflare R2 bucket** both halves talk to (`r2`, recommended — no SSH
+account on the recorder, no port forwarding here, and R2 charges no egress on
+the gigabytes of audio you pull down), or **SSH** to the recorder (`local`).
 
 ```
 recorder (VPS)                     this machine
@@ -49,17 +54,33 @@ pip install -r requirements.txt
 pip install -e .                                  # provides the `dndt` command
 
 cp .env.example .env
-$EDITOR .env                                      # REMOTE_HOST, REMOTE_USER, WORKSPACE_DIR
+$EDITOR .env                                      # STORAGE_BACKEND, WORKSPACE_DIR
 ```
 
 You also need **ffmpeg** on PATH — it does all audio decoding and splitting.
 
-Set up an SSH key to the recorder so transfers need no password:
+### Reaching the recorder
+
+**Cloudflare R2 (`STORAGE_BACKEND=r2`)** — put the same four values the recorder
+uses into `.env` here: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Same bucket, both ends. Nothing else to
+configure and nothing to open on this network.
+
+R2 doubles as the permanent audio archive, so a collected session is left in the
+bucket rather than deleted. Set `R2_KEEP_AUDIO=false` to delete each session
+from R2 once it is transcribed — the `archive/` directory here is then your only
+copy.
+
+**SSH (`STORAGE_BACKEND=local`)** — set `REMOTE_HOST` and `REMOTE_USER`, then
+set up a key so transfers need no password:
 
 ```bash
 ssh-keygen -t ed25519 -C dnd-transcriber
 ssh-copy-id -i ~/.ssh/id_ed25519.pub user@your-recorder
 ```
+
+Leaving `REMOTE_HOST` empty uses plain local directories, which is how the whole
+pipeline is exercised on one machine.
 
 The first `dndt run` downloads the Whisper model (~1.5 GB for `medium`) and
 needs internet. Everything after that is fully offline.
