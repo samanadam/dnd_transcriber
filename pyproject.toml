@@ -1,11 +1,21 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dnd-transcriber"
-version = "1.0.0"
+version = "1.1.0"
 description = "Offline Whisper transcription worker for D&D session recordings"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Eren YANGİL", email = "erendukan.34@gmail.com" }]
 readme = "README.md"
+
+# Without this, setuptools autodiscovery walks the repo root and refuses to
+# build whenever an untracked top-level directory is present.
+[tool.setuptools]
+packages = ["dnd_transcriber"]
 
 [project.scripts]
 dndt = "dnd_transcriber.cli:main"
