@@ -85,6 +85,58 @@ pipeline is exercised on one machine.
 The first `dndt run` downloads the Whisper model (~1.5 GB for `medium`) and
 needs internet. Everything after that is fully offline.
 
+## Running it with Docker
+
+Recommended on a server. The image pins ffmpeg and the Python environment
+together, so what you tested is what runs, and the fixed container name keeps
+two runs from colliding on the same workspace.
+
+```bash
+cp .env.example .env
+$EDITOR .env                 # STORAGE_BACKEND and the R2 credentials
+docker compose build
+docker compose run --rm transcriber status    # check the configuration
+docker compose up                             # fetch, transcribe, push
+```
+
+Use `docker compose up` rather than `run` for real work. `up` honours the
+container name, so a second invocation refuses to start while the first is
+still transcribing. `run --rm` is for one-off commands like `status` and
+`list`, which are safe to do concurrently.
+
+Any subcommand works as an argument:
+
+```bash
+docker compose run --rm transcriber list
+docker compose run --rm transcriber fetch
+```
+
+Two named volumes matter and neither is optional:
+
+- `workspace` holds `archive/`, your permanent copy of the audio. Losing this
+  volume loses your recordings. Back it up like any other data volume.
+- `models` holds the Whisper model. Without it, every run re-downloads ~1.5 GB.
+
+Pre-warm the model once so the first real session does not wait on a download:
+
+```bash
+docker compose run --rm transcriber run
+```
+
+The container runs as uid 1000, not root. If you swap a named volume for a bind
+mount, `chown 1000:1000` the host directory or the container cannot write to it.
+
+Scheduling it is a systemd timer or a cron entry calling `docker compose up`;
+the container name is the lock, so overlapping invocations are already handled.
+
+The production image carries no test tooling. To run the suite against the same
+base, build the `dev` target:
+
+```bash
+docker build --target dev -t dnd-transcriber:dev .
+docker run --rm dnd-transcriber:dev
+```
+
 ## Workspace
 
 ```
