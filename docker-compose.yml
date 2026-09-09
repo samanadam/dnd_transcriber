@@ -1,0 +1,39 @@
+services:
+  transcriber:
+    build: .
+    image: dnd-transcriber:1.1.0
+
+    # Nothing prevents two runs colliding on the same workspace, so the fixed
+    # name is the lock: `docker compose up` will not start a second one while
+    # the first is still transcribing. Use `up`, not `run`, for that reason.
+    container_name: dnd-transcriber
+
+    # A batch job. It drains the queue and exits; a restart policy would put it
+    # in a loop.
+    restart: "no"
+
+    # STORAGE_BACKEND, the R2 credentials and the Whisper settings all live
+    # here. Real environment variables win over the file, so the container
+    # needs no .env baked in.
+    # Optional so the service also works with plain `-e` flags or an
+    # environment injected by systemd, rather than demanding a file on disk.
+    env_file:
+      - path: .env
+        required: false
+
+    volumes:
+      # The permanent audio archive. Losing this loses your recordings.
+      - workspace:/data/workspace
+      # ~1.5 GB of Whisper model, downloaded once instead of every run.
+      - models:/data/models
+
+    # A long session produces a lot of output; do not let it fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  workspace:
+  models:

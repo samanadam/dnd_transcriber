@@ -1,0 +1,34 @@
+# Keep the build context small and never bake secrets or local state into a layer.
+.git/
+.github/
+.venv/
+venv/
+
+# Local state. The workspace holds the audio archive and models hold ~1.5 GB;
+# both belong in volumes, not in the image.
+workspace/
+models/
+data/
+
+# Secrets. .env is mounted or passed at run time, never copied in.
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+plans/
+.claude/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.vscode/
+.idea/
+.cursor/
