@@ -71,3 +71,59 @@ jobs:
         run: |
           pip install -e .
           dndt --help
+
+  docker:
+    # The image is the production artifact, so a Dockerfile that no longer
+    # builds is a broken release, not a stale extra file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dnd-transcriber:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          load: true
+          tags: dnd-transcriber:ci-dev
+          cache-from: type=gha
+
+      - name: The suite passes inside the real image
+        # Catches anything that differs between a developer machine and the
+        # image itself - a missing system package, a missing time zone
+        # database - which host-only testing cannot see.
+        run: docker run --rm dnd-transcriber:ci-dev pytest -q
+
+      - name: Chunking tests ran rather than skipped
+        run: |
+          output=$(docker run --rm dnd-transcriber:ci-dev pytest -q tests/test_chunking.py --no-header)
+          echo "$output"
+          if echo "$output" | grep -q "skipped"; then
+            echo "::error::Chunking tests skipped - ffmpeg missing from the image."
+            exit 1
+          fi
+
+      - name: The CLI runs in the production image
+        run: docker run --rm dnd-transcriber:ci --help
+
+      - name: Time zones resolve in the production image
+        run: |
+          docker run --rm --entrypoint python dnd-transcriber:ci             -c "from zoneinfo import ZoneInfo; ZoneInfo('Europe/Istanbul')"
+
+      - name: The production image carries no test tooling
+        run: |
+          if docker run --rm --entrypoint sh dnd-transcriber:ci -c "command -v pytest"; then
+            echo "::error::pytest leaked into the production image."
+            exit 1
+          fi

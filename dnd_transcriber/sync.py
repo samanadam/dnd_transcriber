@@ -12,6 +12,7 @@ directories with no server involved.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,6 +25,39 @@ log = logging.getLogger(__name__)
 
 class SyncError(RuntimeError):
     """Raised when a transfer fails."""
+
+
+# Session ids become path segments here and, on the SSH transport, words in a
+# command that runs on the recorder. Recorder-generated ids are timestamps and
+# uuids, so this is deliberately narrow: anything a shell or a path would read
+# as punctuation is refused rather than escaped.
+_SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def is_safe_session_id(session_id: str) -> bool:
+    """Whether an id can be used as a path segment and a shell word."""
+    return bool(_SAFE_SESSION_ID.fullmatch(session_id or ""))
+
+
+def validate_session_id(session_id: str) -> str:
+    """Return the id, or raise if it is not safe to interpolate."""
+    if not is_safe_session_id(session_id):
+        raise SyncError(
+            f"Refusing to act on session id {session_id!r}: ids may contain only "
+            "letters, digits, dot, dash and underscore, and must start with a "
+            "letter or digit."
+        )
+    return session_id
+
+
+def _accept_listed(session_ids) -> list[str]:
+    """Drop ids we would refuse to act on, and say which ones."""
+    kept, refused = [], []
+    for sid in session_ids:
+        (kept if is_safe_session_id(sid) else refused).append(sid)
+    if refused:
+        log.warning("Ignoring %d session(s) with unusable names: %s", len(refused), refused)
+    return sorted(kept)
 
 
 class Transport(Protocol):
@@ -46,11 +80,12 @@ class LocalTransport:
     def list_ready(self) -> list[str]:
         if not self.outbox.is_dir():
             return []
-        return sorted(
+        return _accept_listed(
             p.name for p in self.outbox.iterdir() if p.is_dir() and (p / READY_MARKER).is_file()
         )
 
     def pull(self, session_id: str, destination: Path) -> Path:
+        validate_session_id(session_id)
         source = self.outbox / session_id
         if not (source / READY_MARKER).is_file():
             raise SyncError(f"{session_id} is not marked {READY_MARKER} on the recorder")
@@ -61,6 +96,7 @@ class LocalTransport:
         return target
 
     def push(self, session_id: str, source: Path) -> None:
+        validate_session_id(session_id)
         target = self.inbox / session_id
         target.mkdir(parents=True, exist_ok=True)
         for item in sorted(Path(source).iterdir()):
@@ -71,6 +107,7 @@ class LocalTransport:
         (target / DONE_MARKER).write_text("", encoding="utf-8")
 
     def discard_remote(self, session_id: str) -> None:
+        validate_session_id(session_id)
         shutil.rmtree(self.outbox / session_id, ignore_errors=True)
 
 
@@ -123,9 +160,10 @@ class SshTransport:
             f"done 2>/dev/null || true"
         )
         result = self._run([*self._ssh_command(), self.target, remote], "Listing remote sessions")
-        return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+        return _accept_listed(line.strip() for line in result.stdout.splitlines() if line.strip())
 
     def pull(self, session_id: str, destination: Path) -> Path:
+        validate_session_id(session_id)
         destination = Path(destination)
         destination.mkdir(parents=True, exist_ok=True)
         # Trailing slash on the source copies the directory's contents into a
@@ -146,6 +184,7 @@ class SshTransport:
         return destination / session_id
 
     def push(self, session_id: str, source: Path) -> None:
+        validate_session_id(session_id)
         source = Path(source)
         target = f"{self.target}:{self.inbox}/{session_id}/"
         self._run(
@@ -171,9 +210,9 @@ class SshTransport:
         Safe because the transcript has already been pushed and the archive
         copy lives here.
         """
-        safe_id = session_id.replace("'", "")
+        validate_session_id(session_id)
         self._run(
-            [*self._ssh_command(), self.target, f"rm -rf '{self.outbox}/{safe_id}'"],
+            [*self._ssh_command(), self.target, f"rm -rf '{self.outbox}/{session_id}'"],
             f"Removing collected session {session_id} from the recorder",
         )
 
@@ -267,9 +306,10 @@ class R2Transport:
                 session_id = key[len(self.OUTBOX_PREFIX) + 1 : -len(suffix)]
                 if session_id and "/" not in session_id:
                     found.append(session_id)
-        return sorted(found)
+        return _accept_listed(found)
 
     def pull(self, session_id: str, destination: Path) -> Path:
+        validate_session_id(session_id)
         base = self._prefix(self.OUTBOX_PREFIX, session_id)
         keys = self._keys(base)
         if f"{base}{READY_MARKER}" not in keys:
@@ -295,6 +335,7 @@ class R2Transport:
         prefix and fails unless every file is present at its own size. A push
         that only half succeeded then stays collectable instead of vanishing.
         """
+        validate_session_id(session_id)
         base = self._prefix(self.INBOX_PREFIX, session_id)
         files = [p for p in sorted(Path(source).iterdir()) if p.is_file() and p.name != DONE_MARKER]
         for path in files:
@@ -330,6 +371,7 @@ class R2Transport:
         With `keep_audio` off the objects go entirely, and the workspace
         archive here becomes the only copy.
         """
+        validate_session_id(session_id)
         base = self._prefix(self.OUTBOX_PREFIX, session_id)
         if self.keep_audio:
             self.client.delete_object(Bucket=self.bucket, Key=f"{base}{READY_MARKER}")
