@@ -2,3 +2,7 @@ faster-whisper==1.2.1
 numpy>=1.26,<3
 python-dotenv==1.0.1
 boto3==1.35.99
+# Windows ships no system time zone database, so zoneinfo falls back to this.
+# Not pinned exact: it tracks IANA releases, and stale tz rules mean wrong
+# timestamps on transcripts.
+tzdata>=2024.1
