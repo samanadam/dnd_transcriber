@@ -1,0 +1,10 @@
+# Force LF in the working tree, on every platform.
+#
+# This is not cosmetic. A .dockerignore checked out with CRLF can stop
+# matching its own patterns, which would silently bake .env into the image.
+# Dockerfiles and shell scripts have the same problem.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.opus binary
