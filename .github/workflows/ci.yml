@@ -7,7 +7,18 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows is where the transcribing actually happens, and it differs in ways
+    # that matter: no system time zone database, and a different path layout.
+    # Linux-only CI missed both.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - uses: actions/checkout@v4
 
@@ -19,12 +30,17 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
-      - name: Install ffmpeg
+      - name: Install ffmpeg (Linux)
         # Chunking runs entirely through ffmpeg; without it those tests skip
         # rather than fail, which would hide real breakage.
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
 
       - name: Install Python dependencies
         run: |
@@ -41,8 +57,15 @@ jobs:
         run: pytest -q
 
       - name: Confirm the chunking tests actually ran
-        # They skip silently without ffmpeg, so assert they did not.
-        run: pytest -q tests/test_chunking.py --no-header | tee /dev/stderr | grep -qv "skipped"
+        # They skip silently without ffmpeg. Fail if any did, rather than
+        # trusting a green run that tested nothing.
+        run: |
+          output=$(pytest -q tests/test_chunking.py --no-header)
+          echo "$output"
+          if echo "$output" | grep -q "skipped"; then
+            echo "::error::Chunking tests skipped - ffmpeg is missing."
+            exit 1
+          fi
 
       - name: Check the CLI is wired up
         run: |
