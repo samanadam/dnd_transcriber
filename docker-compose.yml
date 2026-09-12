@@ -1,7 +1,12 @@
+# GPU by default. On a machine without an NVIDIA GPU, add the CPU override:
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+# or put COMPOSE_FILE=docker-compose.yml:docker-compose.cpu.yml in .env.
 services:
   transcriber:
-    build: .
-    image: dnd-transcriber:1.1.0
+    build:
+      context: .
+      target: gpu
+    image: dnd-transcriber:1.2.0
 
     # Nothing prevents two runs colliding on the same workspace, so the fixed
     # name is the lock: `docker compose up` will not start a second one while
@@ -12,19 +17,27 @@ services:
     # in a loop.
     restart: "no"
 
-    # STORAGE_BACKEND, the R2 credentials and the Whisper settings all live
-    # here. Real environment variables win over the file, so the container
-    # needs no .env baked in.
     # Optional so the service also works with plain `-e` flags or an
     # environment injected by systemd, rather than demanding a file on disk.
     env_file:
       - path: .env
         required: false
 
+    # Without this reservation the container never sees the GPU, however many
+    # the host has, and WHISPER_DEVICE=auto quietly runs on the CPU. The host
+    # needs the NVIDIA driver and the NVIDIA Container Toolkit.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
     volumes:
       # The permanent audio archive. Losing this loses your recordings.
       - workspace:/data/workspace
-      # ~1.5 GB of Whisper model, downloaded once instead of every run.
+      # The Whisper model, downloaded once instead of every run.
       - models:/data/models
 
     # A long session produces a lot of output; do not let it fill the disk.

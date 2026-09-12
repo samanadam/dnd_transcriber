@@ -1,0 +1,8 @@
+# CUDA libraries for GPU transcription. Installed only into the GPU image; a
+# CPU install never needs them.
+#
+# ctranslate2 4.x needs cuBLAS for CUDA 12 and cuDNN 9. Pinned exactly: these
+# are over a gigabyte together, and a silent minor bump is precisely the kind
+# of change that breaks on a driver that worked yesterday.
+nvidia-cublas-cu12==12.8.4.1
+nvidia-cudnn-cu12==9.10.2.21

@@ -73,15 +73,18 @@ jobs:
           dndt --help
 
   docker:
-    # The image is the production artifact, so a Dockerfile that no longer
+    # The images are the production artifacts, so a Dockerfile that no longer
     # builds is a broken release, not a stale extra file.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space for the CUDA layers
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build the production image
+      - name: Build the GPU image (default target)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -89,6 +92,15 @@ jobs:
           tags: dnd-transcriber:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build the CPU image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: cpu
+          load: true
+          tags: dnd-transcriber:ci-cpu
+          cache-from: type=gha
 
       - name: Build the dev image
         uses: docker/build-push-action@v6
@@ -114,16 +126,40 @@ jobs:
             exit 1
           fi
 
-      - name: The CLI runs in the production image
-        run: docker run --rm dnd-transcriber:ci --help
-
-      - name: Time zones resolve in the production image
+      - name: The GPU image carries loadable CUDA libraries
         run: |
-          docker run --rm --entrypoint python dnd-transcriber:ci             -c "from zoneinfo import ZoneInfo; ZoneInfo('Europe/Istanbul')"
+          docker run --rm --entrypoint python dnd-transcriber:ci -c \
+            "import ctypes; ctypes.CDLL('libcublas.so.12'); ctypes.CDLL('libcudnn.so.9')"
 
-      - name: The production image carries no test tooling
+      - name: With no GPU, the GPU image falls back to the CPU instead of failing
+        # CI runners have no GPU, which makes them the right place to prove the
+        # default image is never a dead end on a CPU-only machine.
         run: |
-          if docker run --rm --entrypoint sh dnd-transcriber:ci -c "command -v pytest"; then
-            echo "::error::pytest leaked into the production image."
+          output=$(docker run --rm dnd-transcriber:ci status)
+          echo "$output"
+          echo "$output" | grep -q "Device:    cpu/int8 (auto, no GPU visible)"
+
+      - name: The CPU image carries no CUDA libraries
+        run: |
+          if docker run --rm --entrypoint sh dnd-transcriber:ci-cpu \
+              -c "ls /usr/local/lib/python3.11/site-packages/nvidia"; then
+            echo "::error::CUDA libraries leaked into the CPU image."
             exit 1
           fi
+
+      - name: Both images run the CLI and resolve time zones
+        run: |
+          for image in dnd-transcriber:ci dnd-transcriber:ci-cpu; do
+            docker run --rm "$image" --help
+            docker run --rm --entrypoint python "$image" \
+              -c "from zoneinfo import ZoneInfo; ZoneInfo('Europe/Istanbul')"
+          done
+
+      - name: No shipped image carries test tooling
+        run: |
+          for image in dnd-transcriber:ci dnd-transcriber:ci-cpu; do
+            if docker run --rm --entrypoint sh "$image" -c "command -v pytest"; then
+              echo "::error::pytest leaked into $image."
+              exit 1
+            fi
+          done

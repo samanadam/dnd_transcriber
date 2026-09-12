@@ -87,7 +87,7 @@ needs internet. Everything after that is fully offline.
 
 ## Running it with Docker
 
-Recommended on a server. The image pins ffmpeg and the Python environment
+Recommended on a server. The image pins ffmpeg, CUDA and the Python environment
 together, so what you tested is what runs, and the fixed container name keeps
 two runs from colliding on the same workspace.
 
@@ -95,16 +95,51 @@ two runs from colliding on the same workspace.
 cp .env.example .env
 $EDITOR .env                 # STORAGE_BACKEND and the R2 credentials
 docker compose build
-docker compose run --rm transcriber status    # check the configuration
+docker compose run --rm transcriber status    # check configuration and device
 docker compose up                             # fetch, transcribe, push
 ```
+
+### GPU or CPU
+
+The default is GPU. `WHISPER_DEVICE=auto` uses an NVIDIA GPU whenever the
+container can see one and falls back to the CPU otherwise, so the default image
+is never a dead end. `dndt status` prints which one it resolved to and why;
+check it once after setup, because a GPU the container was never given looks
+exactly like no GPU.
+
+For the GPU, the host needs the NVIDIA driver and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+Confirm Docker can reach the card before anything else:
+
+```bash
+docker run --rm --gpus all ubuntu nvidia-smi
+```
+
+On a machine without an NVIDIA GPU, use the smaller CPU image. Either pass both
+files, or set it once in `.env`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+# or, in .env:  COMPOSE_FILE=docker-compose.yml:docker-compose.cpu.yml
+```
+
+On a 4 GB card such as a GTX 1650, `medium` fits comfortably at the default
+`float16`. For `large-v3`, set `WHISPER_COMPUTE_TYPE=int8_float16`. If a run does
+exhaust GPU memory it stops with exit code 4 and leaves the session queued
+rather than marking it failed.
+
+| Exit code | Meaning |
+|---|---|
+| 2 | configuration error, including `WHISPER_DEVICE=cuda` with no GPU visible |
+| 3 | transfer to or from the recorder failed |
+| 4 | the model could not load or ran out of GPU memory; nothing was failed |
+
+### Running and scheduling
 
 Use `docker compose up` rather than `run` for real work. `up` honours the
 container name, so a second invocation refuses to start while the first is
 still transcribing. `run --rm` is for one-off commands like `status` and
-`list`, which are safe to do concurrently.
-
-Any subcommand works as an argument:
+`list`, which are safe to do concurrently:
 
 ```bash
 docker compose run --rm transcriber list
@@ -115,7 +150,7 @@ Two named volumes matter and neither is optional:
 
 - `workspace` holds `archive/`, your permanent copy of the audio. Losing this
   volume loses your recordings. Back it up like any other data volume.
-- `models` holds the Whisper model. Without it, every run re-downloads ~1.5 GB.
+- `models` holds the Whisper model, so it downloads once rather than every run.
 
 Pre-warm the model once so the first real session does not wait on a download:
 
@@ -129,8 +164,8 @@ mount, `chown 1000:1000` the host directory or the container cannot write to it.
 Scheduling it is a systemd timer or a cron entry calling `docker compose up`;
 the container name is the lock, so overlapping invocations are already handled.
 
-The production image carries no test tooling. To run the suite against the same
-base, build the `dev` target:
+Shipped images carry no test tooling. To run the suite against the same base,
+build the `dev` target:
 
 ```bash
 docker build --target dev -t dnd-transcriber:dev .

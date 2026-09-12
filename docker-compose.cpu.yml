@@ -1,0 +1,14 @@
+# For machines without an NVIDIA GPU. Layer it over the default file:
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+#
+# Builds the smaller image without CUDA libraries and drops the GPU
+# reservation, which would otherwise stop the container from starting on a
+# host that has no NVIDIA runtime.
+services:
+  transcriber:
+    build:
+      target: cpu
+    image: dnd-transcriber:1.2.0-cpu
+    environment:
+      WHISPER_DEVICE: cpu
+    deploy: !reset {}
