@@ -15,10 +15,11 @@ from pathlib import Path
 
 from .config import Config
 from .contract import TRANSCRIPT_MD, ContractError, SessionMetadata, validate_outbox
+from .device import Placement, resolve_placement
 from .jobs import JobResult, run_session
 from .quiet_hours import in_quiet_hours
 from .sync import Transport
-from .transcription import WhisperTranscriber
+from .transcription import ModelLoadError, WhisperTranscriber
 
 log = logging.getLogger(__name__)
 
@@ -51,16 +52,26 @@ class Runner:
         self.config = config
         self.transport = transport
         self._transcriber = transcriber
+        self._placement: Placement | None = None
 
     # -- lazily loaded model ----------------------------------------------
+
+    @property
+    def placement(self) -> Placement:
+        """Where the model runs, with `auto` resolved against this machine."""
+        if self._placement is None:
+            self._placement = resolve_placement(
+                self.config.whisper_device, self.config.whisper_compute_type
+            )
+        return self._placement
 
     @property
     def transcriber(self) -> WhisperTranscriber:
         if self._transcriber is None:
             self._transcriber = WhisperTranscriber(
                 self.config.whisper_model,
-                device=self.config.whisper_device,
-                compute_type=self.config.whisper_compute_type,
+                device=self.placement.device,
+                compute_type=self.placement.compute_type,
                 download_root=self.config.model_cache_dir or None,
                 beam_size=self.config.whisper_beam_size,
                 condition_on_previous_text=self.config.whisper_condition_on_previous_text,
@@ -68,6 +79,23 @@ class Runner:
                 filter_hallucinations_enabled=self.config.filter_hallucinations,
             )
         return self._transcriber
+
+    def _ensure_model(self) -> None:
+        """Load the model before any session depends on it.
+
+        A model that cannot load is a fault of this machine, not of the session.
+        Left to the per-session handler it would move every waiting session to
+        failed/ one after another, each with the same CUDA error.
+        """
+        load = getattr(self.transcriber, "load", None)
+        if load is None:
+            return
+        try:
+            load()
+        except Exception as exc:  # noqa: BLE001 - re-raised with context
+            raise ModelLoadError(
+                f"Could not load Whisper model {self.config.whisper_model!r}: {exc}"
+            ) from exc
 
     # -- scheduling --------------------------------------------------------
 
@@ -149,6 +177,7 @@ class Runner:
                 continue
 
             log.info("Starting transcription of %s (%s)", sid, metadata.name)
+            self._ensure_model()
             try:
                 result = run_session(
                     directory,
@@ -158,7 +187,16 @@ class Runner:
                     chunk_seconds=self.config.transcribe_chunk_minutes * 60,
                     model_name=self.config.whisper_model,
                 )
-            except Exception:  # noqa: BLE001 - one bad session must not stop the rest
+            except Exception as exc:  # noqa: BLE001 - one bad session must not stop the rest
+                if _is_out_of_memory(exc):
+                    # The card, not the recording. Failing this session would
+                    # only repeat for the next one, so stop and leave it queued.
+                    shutil.rmtree(self.config.outgoing_dir / sid, ignore_errors=True)
+                    raise ModelLoadError(
+                        f"Ran out of GPU memory transcribing {sid} with "
+                        f"{self.config.whisper_model!r}. It is still queued. Try "
+                        "WHISPER_COMPUTE_TYPE=int8_float16 or a smaller WHISPER_MODEL."
+                    ) from exc
                 log.exception("Transcription failed for %s", sid)
                 # Drop any half-written output, so a retry starts clean and
                 # nothing downstream mistakes it for finished work.
@@ -236,3 +274,7 @@ class Runner:
         target = into / directory.name
         shutil.rmtree(target, ignore_errors=True)
         shutil.move(str(directory), str(target))
+
+
+def _is_out_of_memory(exc: BaseException) -> bool:
+    return "out of memory" in str(exc).lower()

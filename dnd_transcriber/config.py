@@ -17,6 +17,11 @@ class ConfigError(RuntimeError):
     """Raised when configuration is missing or malformed."""
 
 
+# Where Whisper may run. "auto" takes the GPU when one is visible and the CPU
+# otherwise; see device.py for how that is decided.
+WHISPER_DEVICES = ("auto", "cuda", "cpu")
+
+
 def _get(name: str, default: str = "") -> str:
     return os.environ.get(name, default) or ""
 
@@ -77,8 +82,8 @@ class Config:
 
     # -- Whisper -----------------------------------------------------------
     whisper_model: str = "medium"
-    whisper_device: str = "cpu"
-    whisper_compute_type: str = "int8"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "auto"
     whisper_beam_size: int = 5
     whisper_condition_on_previous_text: bool = False
     whisper_vad_min_silence_ms: int = 500
@@ -153,6 +158,12 @@ def load_config() -> Config:
     except Exception as exc:  # noqa: BLE001
         raise ConfigError(f"Unknown TIMEZONE {timezone_name!r}") from exc
 
+    whisper_device = _get("WHISPER_DEVICE", "auto").strip().lower()
+    if whisper_device not in WHISPER_DEVICES:
+        raise ConfigError(
+            f"WHISPER_DEVICE must be one of {', '.join(WHISPER_DEVICES)}, got {whisper_device!r}"
+        )
+
     storage_backend = _get("STORAGE_BACKEND", "local").lower()
     if storage_backend not in {"local", "r2"}:
         raise ConfigError(f"STORAGE_BACKEND must be 'local' or 'r2', got {storage_backend!r}")
@@ -185,8 +196,8 @@ def load_config() -> Config:
         r2_bucket=r2_settings["R2_BUCKET"],
         r2_keep_audio=_get_bool("R2_KEEP_AUDIO", True),
         whisper_model=_get("WHISPER_MODEL", "medium"),
-        whisper_device=_get("WHISPER_DEVICE", "cpu"),
-        whisper_compute_type=_get("WHISPER_COMPUTE_TYPE", "int8"),
+        whisper_device=whisper_device,
+        whisper_compute_type=_get("WHISPER_COMPUTE_TYPE", "auto").strip().lower(),
         whisper_beam_size=_get_int("WHISPER_BEAM_SIZE", 5),
         whisper_condition_on_previous_text=_get_bool("WHISPER_CONDITION_ON_PREVIOUS_TEXT", False),
         whisper_vad_min_silence_ms=_get_int("WHISPER_VAD_MIN_SILENCE_MS", 500),

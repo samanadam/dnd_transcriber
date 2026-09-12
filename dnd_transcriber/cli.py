@@ -15,6 +15,7 @@ from .config import Config, ConfigError, load_config
 from .runner import Runner
 from .sync import SyncError, build_transport
 from .timeutil import format_duration
+from .transcription import ModelLoadError
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -107,9 +108,13 @@ def cmd_status(runner: Runner, _args: argparse.Namespace) -> int:
         print(f"Recorder:  {where}")
         print(f"Outbox:    {config.remote_outbox}")
     print(f"Workspace: {config.workspace}")
-    print(
-        f"Model:     {config.whisper_model} ({config.whisper_device}/{config.whisper_compute_type})"
-    )
+    print(f"Model:     {config.whisper_model}")
+    # Resolved here rather than echoed from the settings: "auto" in a container
+    # that was never given the GPU is exactly what someone checking needs to see.
+    try:
+        print(f"Device:    {runner.placement.describe(config.whisper_device)}")
+    except ConfigError as exc:
+        print(f"Device:    unusable - {exc}")
     print(f"Chunking:  {config.transcribe_chunk_minutes} min")
     if config.quiet_hours_enabled:
         print(
@@ -177,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
     except SyncError as exc:
         print(f"Transfer failed: {exc}", file=sys.stderr)
         return 3
+    except ModelLoadError as exc:
+        print(f"Model unavailable: {exc}", file=sys.stderr)
+        return 4
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130

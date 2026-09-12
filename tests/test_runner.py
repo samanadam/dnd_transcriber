@@ -17,7 +17,7 @@ from dnd_transcriber.contract import (
 )
 from dnd_transcriber.runner import Runner
 from dnd_transcriber.sync import LocalTransport, SyncError
-from dnd_transcriber.transcription import RawSegment
+from dnd_transcriber.transcription import ModelLoadError, RawSegment
 
 METADATA = SessionMetadata(
     session_id="s1",
@@ -199,6 +199,58 @@ def test_a_failing_session_is_set_aside_not_retried_forever(setup):
     assert runner.transcribe() == []
     assert (config.failed_dir / "s1").is_dir()
     assert not (config.incoming_dir / "s1").exists()
+
+
+class UnloadableTranscriber:
+    """A machine problem: the model never loads."""
+
+    def load(self):
+        raise RuntimeError("Library libcublas.so.12 is not found or cannot be loaded")
+
+    def transcribe_file(self, path: Path, language: str, initial_prompt=None):
+        raise AssertionError("nothing may be transcribed without a model")
+
+
+class OutOfMemoryTranscriber:
+    def load(self):
+        return None
+
+    def transcribe_file(self, path: Path, language: str, initial_prompt=None):
+        raise RuntimeError("CUDA failed with error out of memory")
+
+
+def test_a_model_that_cannot_load_stops_the_run_and_fails_nothing(setup):
+    config, transport, outbox, _ = setup
+    stage_remote(outbox)
+    runner = Runner(config, transport, UnloadableTranscriber())
+    runner.fetch()
+
+    with pytest.raises(ModelLoadError, match="libcublas"):
+        runner.transcribe()
+
+    assert (config.incoming_dir / "s1").is_dir()
+    assert not (config.failed_dir / "s1").exists()
+
+
+def test_running_out_of_gpu_memory_keeps_the_session_queued(setup):
+    config, transport, outbox, _ = setup
+    stage_remote(outbox)
+    runner = Runner(config, transport, OutOfMemoryTranscriber())
+    runner.fetch()
+
+    with pytest.raises(ModelLoadError, match="int8_float16"):
+        runner.transcribe()
+
+    assert (config.incoming_dir / "s1").is_dir()
+    assert not (config.failed_dir / "s1").exists()
+    assert not (config.outgoing_dir / "s1").exists()
+
+
+def test_no_waiting_work_never_loads_the_model(setup):
+    config, transport, _, _ = setup
+    runner = Runner(config, transport, UnloadableTranscriber())
+
+    assert runner.transcribe() == []
 
 
 # -- pushing back and archiving -------------------------------------------

@@ -284,6 +284,15 @@ def write_transcripts(
 # -- model wrapper --------------------------------------------------------
 
 
+class ModelLoadError(RuntimeError):
+    """The model cannot run on this machine at all.
+
+    Distinct from a session failing: this is about the machine - missing CUDA
+    libraries, a card without enough memory - so it stops the run instead of
+    marking every waiting session as failed in turn.
+    """
+
+
 class WhisperTranscriber:
     """Lazily-loaded faster-whisper wrapper. One model instance per process."""
 
