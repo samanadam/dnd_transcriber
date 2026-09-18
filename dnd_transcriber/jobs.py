@@ -20,6 +20,7 @@ from .contract import (
     TRANSCRIPT_MD,
     SessionMetadata,
     audio_tracks,
+    track_user_id,
 )
 from .timeutil import from_iso, utcnow
 from .transcription import (
@@ -120,7 +121,7 @@ def transcribe_tracks(
     per_user: dict[str, list[RawSegment]] = {}
     warnings: list[str] = []
     for path in tracks:
-        user_id = path.stem
+        user_id = track_user_id(path)
         try:
             per_user[user_id] = transcribe_one(
                 path, transcriber, language, initial_prompt, chunk_seconds
