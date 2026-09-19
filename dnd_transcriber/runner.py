@@ -245,10 +245,32 @@ class Runner:
         return pushed
 
     def session(self, session_id: str | None = None) -> list[str]:
-        """The everyday command: fetch, transcribe, send back."""
+        """The everyday command: fetch, then transcribe and send back one by one.
+
+        Each transcript leaves as soon as it exists. Doing all the transcribing
+        first would hold the earliest session's transcript until the last one
+        finished, which is hours on a long queue, and would lose the delivery of
+        everything finished if the run were cut short.
+        """
         self.fetch(session_id)
-        self.transcribe(session_id)
-        return self.push(session_id)
+
+        pushed: list[str] = []
+        # Finished by an earlier run that stopped before sending: no more work
+        # to do on these, so they go first rather than behind the queue.
+        if session_id is None or (self.config.outgoing_dir / session_id).is_dir():
+            pushed += self.push(session_id)
+
+        waiting = (
+            [session_id]
+            if session_id
+            else sorted(p.name for p in self.config.incoming_dir.glob("*") if p.is_dir())
+        )
+        for sid in waiting:
+            if not (self.config.incoming_dir / sid).is_dir():
+                continue
+            if self.transcribe(sid):
+                pushed += self.push(sid)
+        return pushed
 
     # -- housekeeping ------------------------------------------------------
 

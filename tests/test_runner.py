@@ -317,6 +317,86 @@ def test_session_command_does_the_whole_round_trip(setup):
     assert not (outbox / "s1").exists()
 
 
+class OrderRecordingTranscriber(FakeTranscriber):
+    """Notes, for every session it starts, which transcripts had already been sent."""
+
+    def __init__(self, inbox: Path) -> None:
+        super().__init__()
+        self.inbox = inbox
+        self.sent_when_started: dict[str, list[str]] = {}
+
+    def transcribe_file(self, path: Path, language: str, initial_prompt=None):
+        session_id = path.parent.name
+        self.sent_when_started.setdefault(
+            session_id, sorted(p.parent.name for p in self.inbox.glob("*/DONE"))
+        )
+        return super().transcribe_file(path, language, initial_prompt)
+
+
+def test_each_transcript_is_sent_before_the_next_session_starts(setup):
+    config, transport, outbox, inbox = setup
+    for sid in ("s1", "s2", "s3"):
+        stage_remote(outbox, sid)
+    transcriber = OrderRecordingTranscriber(inbox)
+
+    assert Runner(config, transport, transcriber).session() == ["s1", "s2", "s3"]
+    assert transcriber.sent_when_started == {
+        "s1": [],
+        "s2": ["s1"],
+        "s3": ["s1", "s2"],
+    }
+
+
+def test_a_run_that_dies_midway_has_already_delivered_what_it_finished(setup):
+    config, transport, outbox, inbox = setup
+    stage_remote(outbox, "s1")
+    stage_remote(outbox, "s2")
+
+    class OutOfMemoryOnSecond(FakeTranscriber):
+        def transcribe_file(self, path: Path, language: str, initial_prompt=None):
+            if path.parent.name == "s2":
+                raise RuntimeError("CUDA failed with error out of memory")
+            return super().transcribe_file(path, language, initial_prompt)
+
+    runner = Runner(config, transport, OutOfMemoryOnSecond())
+    with pytest.raises(ModelLoadError, match="out of GPU memory"):
+        runner.session()
+
+    assert (inbox / "s1" / DONE_MARKER).is_file()
+    assert not (outbox / "s1").exists()
+    assert (config.incoming_dir / "s2").is_dir()
+    assert not (inbox / "s2").exists()
+
+
+def test_a_transcript_left_over_from_an_interrupted_run_is_sent_first(setup):
+    config, transport, outbox, inbox = setup
+    stage_remote(outbox, "s1")
+    stage_remote(outbox, "s2")
+    first = Runner(config, transport, FakeTranscriber())
+    first.fetch("s1")
+    first.transcribe("s1")  # transcribed, never sent
+
+    transcriber = OrderRecordingTranscriber(inbox)
+    assert Runner(config, transport, transcriber).session() == ["s1", "s2"]
+    assert transcriber.sent_when_started == {"s2": ["s1"]}
+
+
+def test_a_failed_session_does_not_stop_the_rest_being_sent(setup):
+    config, transport, outbox, inbox = setup
+    stage_remote(outbox, "s1")
+    stage_remote(outbox, "s2")
+
+    class BreaksOnFirst(FakeTranscriber):
+        def transcribe_file(self, path: Path, language: str, initial_prompt=None):
+            if path.parent.name == "s1":
+                raise RuntimeError("corrupt track")
+            return super().transcribe_file(path, language, initial_prompt)
+
+    assert Runner(config, transport, BreaksOnFirst()).session() == ["s2"]
+    assert (config.failed_dir / "s1").is_dir()
+    assert (inbox / "s2" / DONE_MARKER).is_file()
+
+
 def test_status_reports_the_stage_of_each_session(setup):
     config, transport, outbox, _ = setup
     stage_remote(outbox)
