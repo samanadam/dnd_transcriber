@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the D&D transcriber every morning
+
+[Timer]
+# The time zone is part of the expression, so this is 06:00 in Istanbul
+# whatever the server's own clock is set to.
+OnCalendar=*-*-* 06:00:00 Europe/Istanbul
+# A run missed because the machine was off or asleep happens as soon as it is
+# back, instead of waiting for the next morning.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

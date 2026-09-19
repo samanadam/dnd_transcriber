@@ -1,0 +1,17 @@
+[Unit]
+Description=D&D transcriber: collect, transcribe and return waiting sessions
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+# oneshot: systemd will not start a second run while this one is still active,
+# so a long queue can never overlap with the next timer tick.
+Type=oneshot
+WorkingDirectory=%h/apps/dnd_transcriber
+# `up`, not `run`: it honours the fixed container name in docker-compose.yml.
+# --exit-code-from passes the transcriber's exit code through (3 transfer
+# failed, 4 model or GPU memory) so a failed night shows up as a failed unit.
+ExecStart=/usr/bin/docker compose up --no-build --exit-code-from transcriber
+# A long queue is expected to run for hours. Cap it so a hung run cannot hold
+# the GPU forever.
+TimeoutStartSec=12h

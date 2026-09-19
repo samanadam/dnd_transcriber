@@ -161,8 +161,32 @@ docker compose run --rm transcriber run
 The container runs as uid 1000, not root. If you swap a named volume for a bind
 mount, `chown 1000:1000` the host directory or the container cannot write to it.
 
-Scheduling it is a systemd timer or a cron entry calling `docker compose up`;
-the container name is the lock, so overlapping invocations are already handled.
+A run drains the whole queue, oldest session first, and sends each transcript
+back as soon as it is done rather than after the last one, so an interrupted
+night has already delivered what it finished. A session that fails is moved to
+`failed/`; its audio is still waiting on the recorder, so the next run tries it
+again.
+
+### Running it every morning
+
+`deploy/` has a systemd service and timer that run it at 06:00 Istanbul time.
+The time zone is written into the timer, so it does not depend on the server's
+clock (which is often UTC). Install them as a user service so nothing runs as
+root:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/dnd-transcriber.service deploy/dnd-transcriber.timer ~/.config/systemd/user/
+sudo loginctl enable-linger "$USER"        # lets user services run while logged out
+systemctl --user daemon-reload
+systemctl --user enable --now dnd-transcriber.timer
+systemctl --user list-timers dnd-transcriber.timer   # shows the next run
+journalctl --user -u dnd-transcriber.service -f      # follow a run
+```
+
+The service is `Type=oneshot`, so a long queue can never overlap the next tick.
+`Persistent=true` runs a missed morning as soon as the machine is back. A laptop
+that suspends when its lid closes will miss the run until it wakes.
 
 Shipped images carry no test tooling. To run the suite against the same base,
 build the `dev` target:
