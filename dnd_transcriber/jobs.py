@@ -157,6 +157,7 @@ def build_transcript(
         tz=tz,
         duration_seconds=duration,
         warnings=warnings,
+        campaign_name=metadata.campaign_name,
     )
     payload = render_json(
         segments,
@@ -168,6 +169,8 @@ def build_transcript(
         language=metadata.language,
         model=model_name,
         warnings=warnings,
+        campaign_id=metadata.campaign_id,
+        campaign_name=metadata.campaign_name,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)

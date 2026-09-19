@@ -281,6 +281,11 @@ carries a version number: if the two repos drift apart, the mismatch fails
 loudly instead of being silently misread. **Change `contract.py` in both repos
 in the same commit.**
 
+`metadata.json` may also carry `campaign_id` and `campaign_name` (both optional,
+still schema 2). When present they are written into `transcript.json` and shown
+as a `Campaign` line in `transcript.md`, so the archive says which game a
+transcript belongs to. The campaign's names for Whisper arrive in `prompt_extra`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

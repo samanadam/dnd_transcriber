@@ -211,6 +211,7 @@ def render_markdown(
     tz: ZoneInfo,
     duration_seconds: float,
     warnings: Sequence[str] = (),
+    campaign_name: str | None = None,
 ) -> str:
     """`[HH:MM:SS] Speaker: line`, with timestamps in the configured local time."""
     local_start = to_local(session_start, tz)
@@ -223,6 +224,8 @@ def render_markdown(
         f"- **Speakers:** {len(speakers)} ({', '.join(speakers) if speakers else 'none'})",
         f"- **Words:** {word_count(segments)}",
     ]
+    if campaign_name:
+        lines.insert(3, f"- **Campaign:** {campaign_name}")
     if warnings:
         lines.append("")
         lines.append("## Warnings")
@@ -249,10 +252,14 @@ def render_json(
     language: str,
     model: str,
     warnings: Sequence[str] = (),
+    campaign_id: str | None = None,
+    campaign_name: str | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "session_name": session_name,
+        "campaign_id": campaign_id,
+        "campaign_name": campaign_name,
         "start_time_utc": session_start.isoformat(),
         "timezone": str(tz),
         "duration_seconds": round(duration_seconds, 3),

@@ -132,3 +132,46 @@ def test_json_payload_carries_structured_segments():
     assert segment["end"] == 3.5
     assert segment["start_local"].startswith("2026-05-01T21:00:02")
     assert payload["word_count"] == 1
+
+
+def test_campaign_is_echoed_into_both_outputs():
+    markdown = render_markdown(
+        [],
+        session_name="S",
+        session_start=START,
+        tz=TZ,
+        duration_seconds=1,
+        campaign_name="Strahd",
+    )
+    payload = render_json(
+        [],
+        session_id="abc",
+        session_name="S",
+        session_start=START,
+        tz=TZ,
+        duration_seconds=1,
+        language="tr",
+        model="medium",
+        campaign_id="abc123",
+        campaign_name="Strahd",
+    )
+    assert "- **Campaign:** Strahd" in markdown
+    assert payload["campaign_id"] == "abc123"
+    assert payload["campaign_name"] == "Strahd"
+
+
+def test_no_campaign_line_when_unassigned():
+    markdown = render_markdown([], session_name="S", session_start=START, tz=TZ, duration_seconds=1)
+    payload = render_json(
+        [],
+        session_id="abc",
+        session_name="S",
+        session_start=START,
+        tz=TZ,
+        duration_seconds=1,
+        language="tr",
+        model="medium",
+    )
+    assert "Campaign" not in markdown
+    assert payload["campaign_id"] is None
+    assert payload["campaign_name"] is None
