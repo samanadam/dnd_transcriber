@@ -34,6 +34,12 @@ services:
               count: 1
               capabilities: [gpu]
 
+    # Beats env_file, so a WORKSPACE_DIR copied over from .env.example cannot
+    # move the workspace out of the volume and into the container's throwaway
+    # filesystem, where the archive would vanish on exit.
+    environment:
+      WORKSPACE_DIR: /data/workspace
+
     volumes:
       # The permanent audio archive. Losing this loses your recordings.
       - workspace:/data/workspace
